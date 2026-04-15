@@ -28,3 +28,13 @@ config/*.json
 # OS
 Thumbs.db
 .DS_Store
+
+# Node.js
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# CSMAR specific
+token.txt
+csmar-log.log
