@@ -205,36 +205,6 @@ python run.py --keywords "测试" --max-results 2 --log-level DEBUG
 - 请遵守相关法律法规和网站使用条款
 - 备用下载渠道（Sci-Hub 等）的使用请自行判断法律合规性
 
-## CSMAR金融数据MCP服务器
-
-本项目包含一个**CSMAR金融数据MCP服务器** (`csmar-mcp-server/`)，提供在Claude Code中直接访问国泰安(CSMAR)金融数据库的能力。
-
-### 主要功能
-- 支持240+个金融数据库访问（财务报表、股票交易、公司信息等）
-- 11个MCP工具，支持数据库探索、数据查询、预览等功能
-- 智能登录管理，支持环境变量自动登录和令牌缓存
-- 完整的文档和配置示例
-
-### 快速开始
-```bash
-# 进入CSMAR MCP服务器目录
-cd csmar-mcp-server
-
-# 安装依赖
-npm install
-
-# 配置环境变量
-cp config/.env.example .env
-# 编辑.env文件，填入CSMAR账号信息
-
-# 配置Claude Code MCP服务器
-# 参考csmar-mcp-server/README.md中的配置说明
-
-# 重启Claude Code后即可使用MCP工具
-```
-
-详细使用指南请参考 [csmar-mcp-server/README.md](csmar-mcp-server/README.md)。
-
 ## License
 
 [MIT](LICENSE)
