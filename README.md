@@ -29,8 +29,8 @@
 ### 安装
 
 ```bash
-git clone https://github.com/ww11-max/AI-FOR-ECONOMIST.git
-cd AI-FOR-ECONOMIST
+git clone https://github.com/ww11-max/Document-acquisition-tool.git
+cd Document-acquisition-tool
 pip install -r requirements.txt
 ```
 
