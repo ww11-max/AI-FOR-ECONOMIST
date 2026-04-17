@@ -1,5 +1,6 @@
 """
 eco-acquire CLI入口
+经济学文献题录检索工具 — 搜索、提取摘要与元数据、生成结构化报告
 """
 
 import argparse
@@ -16,49 +17,37 @@ from src.workflow import EcoAcquireWorkflow, setup_logging
 
 def main():
     parser = argparse.ArgumentParser(
-        description="eco-acquire: 经济学期刊文献智能获取工具",
+        description="eco-acquire: 经济学文献题录检索工具",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 使用示例:
-  # 关键词搜索并下载
+  # 关键词搜索
   python run.py --keywords "FDI" "国际直接投资" --max-results 10
 
-  # 指定期刊搜索
-  python run.py --journal "经济研究" --keywords "数字经济" --max-results 5
-
-  # 按作者筛选
-  python run.py --keywords "企业创新" --author "张三" --max-results 10
-
-  # 近三年文献
-  python run.py --keywords "FDI" --year-start 2023 --year-end 2026 --max-results 20
+  # 指定期刊 + 年份范围
+  python run.py --keywords "数字经济" --journal "经济研究" --year-start 2023 --year-end 2025
 
   # 精确定位一篇文献
-  python run.py --exact-title "数字经济对FDI的影响" --author "李四" --journal "世界经济" --year-start 2024
+  python run.py --exact-title "数字经济对FDI的影响" --author "李四" --journal "世界经济"
 
-  # 仅搜索不下载
-  python run.py --keywords "人民币国际化" --no-download
+  # AI Planning 模式：执行 AI 生成的检索计划
+  python run.py --batch search_plan.json --connect 9222
 
-  # AI Planning 模式：执行 AI 生成的文献清单
-  python run.py --batch literature_list.json
-
-  # AI Planning + 连接用户浏览器
-  python run.py --batch literature_list.json --connect 9222
-
-  # 自定义任务名
-  python run.py --keywords "企业创新" --task-name "创新文献"
+  # 列出支持的期刊
+  python run.py --list-journals
         """
     )
 
     # 搜索参数
     parser.add_argument("--keywords", nargs="+", help="搜索关键词（可多个）")
     parser.add_argument("--batch", metavar="JSON_FILE",
-                        help="AI Planning 模式：指定文献清单 JSON 文件路径")
+                        help="AI Planning 模式：指定检索计划 JSON 文件路径")
     parser.add_argument("--journal", help="限定期刊名称")
     parser.add_argument("--author", help="按作者姓名筛选")
     parser.add_argument("--exact-title", help="精确文章标题（用于定位单篇文献）")
     parser.add_argument("--year-start", type=int, help="起始年份（含）")
     parser.add_argument("--year-end", type=int, help="结束年份（含）")
-    parser.add_argument("--max-results", type=int, default=10, help="最大结果数（默认10）")
+    parser.add_argument("--max-results", type=int, default=20, help="最大结果数（默认20）")
 
     # 行为参数
     parser.add_argument("--browser", choices=["auto", "chrome", "edge", "firefox"],
@@ -66,8 +55,7 @@ def main():
     parser.add_argument("--connect", type=int, metavar="PORT",
                         help="连接已打开的浏览器（需先用 --remote-debugging-port=PORT 启动）")
     parser.add_argument("--task-name", help="自定义任务名称")
-    parser.add_argument("--no-download", action="store_true", help="仅搜索，不下载PDF")
-    parser.add_argument("--no-conclusion", action="store_true", help="不提取结论摘要")
+    parser.add_argument("--no-abstract", action="store_true", help="不提取摘要")
     parser.add_argument("--headless", action="store_true", help="使用无头浏览器模式")
     parser.add_argument("--log-level", default="INFO", choices=["DEBUG", "INFO", "WARNING", "ERROR"])
     parser.add_argument("--list-journals", action="store_true", help="列出支持的期刊")
@@ -97,7 +85,7 @@ def main():
     browser_val = args.browser if args.browser != "auto" else None
 
     # ========================================
-    # AI Planning 模式：批量执行文献清单
+    # AI Planning 模式：批量执行检索计划
     # ========================================
     if args.batch:
         workflow = EcoAcquireWorkflow(headless=args.headless, browser=browser_val,
@@ -107,12 +95,11 @@ def main():
             print(f"\n{'='*60}")
             print(f"  eco-acquire AI Planning 模式")
             print(f"{'='*60}\n")
-            print(f"  文献清单: {args.batch}\n")
+            print(f"  检索计划: {args.batch}\n")
 
             report = workflow.run_batch(
                 batch_file=args.batch,
-                download=not args.no_download,
-                extract_conclusion=not args.no_conclusion,
+                extract_abstract=not args.no_abstract,
                 connect_port=args.connect,
                 global_journal=args.journal,
                 global_year_start=args.year_start,
@@ -121,7 +108,7 @@ def main():
 
             print(f"\n{'='*60}")
             print(f"  任务完成: {report.get('status', 'unknown')}")
-            print(f"  总计: {report.get('total_papers', 0)} 篇")
+            print(f"  总计: {report.get('total_papers', 0)} 项检索")
             print(f"  找到: {report.get('success_count', 0)} 篇")
             print(f"  未找到: {report.get('fail_count', 0)} 篇")
             print(f"  输出目录: {report.get('task_dir', 'N/A')}")
@@ -137,18 +124,18 @@ def main():
         return
 
     # ========================================
-    # 传统模式：单次搜索
+    # 直接搜索模式
     # ========================================
     workflow = EcoAcquireWorkflow(headless=args.headless, browser=browser_val,
                                    connect_port=args.connect)
 
     try:
         print(f"\n{'='*60}")
-        print(f"  eco-acquire 经济学文献获取工具")
+        print(f"  eco-acquire 经济学文献题录检索")
         print(f"{'='*60}\n")
 
         # 显示搜索条件
-        print("  搜索条件:")
+        print("  检索条件:")
         if args.exact_title:
             print(f"    精确标题: {args.exact_title}")
         if args.keywords:
@@ -169,19 +156,14 @@ def main():
             year_start=args.year_start,
             year_end=args.year_end,
             max_results=args.max_results,
-            download=not args.no_download,
-            extract_conclusion=not args.no_conclusion,
+            extract_abstract=not args.no_abstract,
             task_name=args.task_name,
         )
 
         # 打印摘要
         print(f"\n{'='*60}")
         print(f"  任务完成: {report.get('status', 'unknown')}")
-        print(f"  搜索到: {report.get('search_count', 0)} 篇")
-        print(f"  下载成功: {report.get('success_count', 0)} 篇")
-        print(f"  下载失败: {report.get('fail_count', 0)} 篇")
-        if report.get('fallback_success'):
-            print(f"  备用渠道下载: {len(report.get('fallback_success', []))} 篇")
+        print(f"  检索到: {report.get('search_count', 0)} 篇")
         print(f"  输出目录: {report.get('task_dir', 'N/A')}")
         if report.get("error"):
             print(f"  错误: {report['error']}")

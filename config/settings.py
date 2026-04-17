@@ -1,10 +1,10 @@
 """
 eco-acquire 配置模块
-经济学期刊文献智能获取系统
+经济学期刊文献题录检索工具
 
 路径策略：
   - 代码目录（SKILL_DIR）：只读，存放代码和配置
-  - 数据目录（DATA_DIR）：可写，存放在用户目录下，存放输出、下载、日志
+  - 数据目录（DATA_DIR）：可写，存放在用户目录下，存放输出、日志
   - 支持通过 ECO_ACQUIRE_HOME 环境变量自定义数据目录
 """
 
@@ -39,7 +39,6 @@ DATA_DIR = Path(os.getenv("ECO_ACQUIRE_HOME", Path.home() / "eco-acquire")).reso
 
 # 子目录
 OUTPUTS_DIR = DATA_DIR / "outputs"
-DOWNLOADS_DIR = DATA_DIR / "downloads"
 LOGS_DIR = DATA_DIR / "logs"
 CONFIG_DIR = DATA_DIR / "config"
 
@@ -49,6 +48,7 @@ CONFIG_DIR = DATA_DIR / "config"
 BROWSER = os.getenv("BROWSER", "auto").lower()
 USE_HEADLESS = os.getenv("USE_HEADLESS", "false").lower() == "true"
 DEBUG = os.getenv("DEBUG", "false").lower() == "true"
+UNSAFE_SSL = os.getenv("UNSAFE_SSL", "false").lower() == "true"
 
 # ============================================================
 # 目标经济学期刊列表
@@ -130,15 +130,6 @@ GOOGLE_SCHOLAR_URL = "https://scholar.google.com/scholar"
 BING_ACADEMIC_URL = "https://cn.bing.com/academic/search"
 
 # ============================================================
-# 备用下载渠道配置
-# ============================================================
-ENABLE_FALLBACK = os.getenv("ENABLE_FALLBACK", "true").lower() == "true"
-UNSAFE_SSL = os.getenv("UNSAFE_SSL", "false").lower() == "true"
-UNPAYWALL_EMAIL = os.getenv("UNPAYWALL_EMAIL", "")
-SCIHUB_DOMAINS = os.getenv("SCIHUB_DOMAINS", "").split(",") if os.getenv("SCIHUB_DOMAINS") else []
-FALLBACK_DOWNLOAD_TIMEOUT = int(os.getenv("FALLBACK_DOWNLOAD_TIMEOUT", "60"))
-
-# ============================================================
 # 搜索容错配置
 # ============================================================
 # CNKI搜索失败时是否自动切换备用搜索引擎
@@ -151,7 +142,6 @@ MAX_RETRIES = int(os.getenv("MAX_RETRIES", "3"))
 REQUEST_TIMEOUT = int(os.getenv("REQUEST_TIMEOUT", "30"))
 WAIT_TIME_MIN = float(os.getenv("WAIT_TIME_MIN", "2.0"))
 WAIT_TIME_MAX = float(os.getenv("WAIT_TIME_MAX", "5.0"))
-MAX_WORKERS = int(os.getenv("MAX_WORKERS", "2"))
 
 # ============================================================
 # 日志配置
@@ -166,12 +156,12 @@ LOG_FORMAT = "%(asctime)s [%(levelname)s] %(name)s: %(message)s"
 def ensure_dirs() -> list:
     """
     确保所有必需目录存在且可写。
-    
+
     Returns:
         可用目录列表；如果写入失败返回信息。
     """
     dirs_info = []
-    for d in [DATA_DIR, OUTPUTS_DIR, DOWNLOADS_DIR, LOGS_DIR, CONFIG_DIR]:
+    for d in [DATA_DIR, OUTPUTS_DIR, LOGS_DIR, CONFIG_DIR]:
         try:
             d.mkdir(parents=True, exist_ok=True)
             # 验证写入权限

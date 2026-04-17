@@ -170,7 +170,7 @@ class BrowserManager:
     def __init__(self, headless: bool = None, download_dir: str = None,
                  browser: str = None, connect_port: int = None):
         self.headless = headless if headless is not None else settings.USE_HEADLESS
-        self.download_dir = download_dir or str(settings.DOWNLOADS_DIR)
+        self.download_dir = download_dir or str(settings.OUTPUTS_DIR)
         self.driver = None
         self.connect_port = connect_port  # 连接已有浏览器的调试端口
 

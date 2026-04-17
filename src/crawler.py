@@ -1,6 +1,6 @@
 """
 CNKI文献爬虫核心模块
-基于Selenium实现知网文献搜索、链接获取和PDF下载
+基于Selenium实现知网文献搜索与元数据提取
 """
 
 import re
@@ -8,16 +8,14 @@ import time
 import random
 import logging
 from datetime import datetime
-from typing import List, Dict, Optional, Tuple, Union
+from typing import List, Dict, Optional, Union
 from urllib.parse import quote, quote_plus
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 from selenium import webdriver
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
-from selenium.webdriver import ActionChains
 
 from .driver_manager import BrowserManager, simulate_human_behavior, wait_random_time
 from config import settings
@@ -31,11 +29,12 @@ class CNKICrawler:
     def __init__(self, headless: Optional[bool] = None, download_dir: Optional[str] = None,
                  browser: Optional[str] = None, connect_port: Optional[int] = None):
         self.headless = headless if headless is not None else settings.USE_HEADLESS
-        self.download_dir = download_dir or str(settings.DOWNLOADS_DIR)
+        self.download_dir = download_dir or str(settings.OUTPUTS_DIR)
         self.browser = browser
         self.connect_port = connect_port
         self.driver_manager = None
         self.driver = None
+        self._expert_fell_back = False  # 专业检索是否回退到普通搜索
 
     def __enter__(self):
         self.driver_manager = BrowserManager(self.headless, self.download_dir,
@@ -432,6 +431,7 @@ class CNKICrawler:
                 search_btn.click()
             except Exception as e:
                 logger.warning(f"专业检索输入失败，回退到普通搜索: {e}")
+                self._expert_fell_back = True
                 # 回退：用第一个条件做普通搜索
                 first_cond = all_conditions[0]
                 m = re.search(r'"(.+?)"', first_cond)
@@ -527,13 +527,15 @@ class CNKICrawler:
             )
 
             # 客户端二次过滤兜底
-            # keyword 搜索场景：只过滤年份和作者，不过滤期刊
-            # （期刊筛选由 CNKI 页面/专业检索处理，客户端 journal 过滤容易误杀）
+            # 专业检索成功时不做期刊过滤（CNKI 已过滤）；
+            # 专业检索回退到普通搜索时，需要客户端做期刊过滤
+            client_journal = journal_filter if self._expert_fell_back else ""
             results = self._client_side_filter(
                 results, author=author_filter,
-                journal="",  # 不做期刊客户端过滤
+                journal=client_journal,
                 year_start=year_start, year_end=year_end
             )
+            self._expert_fell_back = False  # 重置标记
             return results[:max_results]
 
         # 纯关键词 → 普通搜索
@@ -1365,156 +1367,58 @@ class CNKICrawler:
         return results
 
     # ============================================================
-    # PDF下载
+    # 批量元数据提取（从搜索结果列表中的每篇文章详情页）
     # ============================================================
-    def download_articles(self, articles: List[Dict],
-                          file_type: str = "pdf",
-                          max_workers: int = 2) -> Dict[str, List[str]]:
-        """批量下载文献"""
-        if file_type not in ["pdf", "caj"]:
-            raise ValueError("文件类型必须是 'pdf' 或 'caj'")
+    def batch_extract_metadata(self, articles: List[Dict],
+                                extract_abstract: bool = True) -> List[Dict]:
+        """
+        批量提取文章的摘要、关键词、DOI 等元数据。
 
-        logger.info(f"开始下载 {len(articles)} 篇文献 ({file_type})")
-        results = {"success": [], "failed": []}
+        对每篇文章进入其 CNKI 详情页，提取：
+        - 摘要（abstract）
+        - 关键词（keywords）
+        - DOI
+        - 作者（authors，如果搜索结果页缺失）
+        - 期刊来源（journal，如果搜索结果页缺失）
+        - 年份（year，如果搜索结果页缺失）
 
-        with ThreadPoolExecutor(max_workers=max_workers) as executor:
-            futures = {}
-            for i, article in enumerate(articles):
-                future = executor.submit(
-                    self._download_single_article, article, i, file_type
-                )
-                futures[future] = article.get("title", f"article_{i}")
+        Args:
+            articles: 搜索结果列表
+            extract_abstract: 是否提取摘要（较耗时）
 
-            for future in as_completed(futures):
-                title = futures[future]
-                try:
-                    success, msg = future.result()
-                    if success:
-                        results["success"].append(title)
-                        logger.info(f"下载成功: {title}")
-                    else:
-                        results["failed"].append(title)
-                        logger.warning(f"下载失败: {title} - {msg}")
-                except Exception as e:
-                    results["failed"].append(title)
-                    logger.error(f"下载异常: {title} - {e}")
+        Returns:
+            增强后的文章列表
+        """
+        enriched = []
+        for i, article in enumerate(articles):
+            link = article.get("link", "")
+            if not link:
+                enriched.append(article)
+                continue
 
-        logger.info(f"下载完成: {len(results['success'])} 成功, {len(results['failed'])} 失败")
-        return results
-
-    def _download_single_article(self, article: Dict, index: int,
-                                  file_type: str) -> Tuple[bool, str]:
-        """下载单篇文章"""
-        link = article.get("link", "")
-        title = article.get("title", f"article_{index}")
-
-        if not link:
-            return False, "无有效链接"
-
-        for attempt in range(1, settings.MAX_RETRIES + 1):
             try:
-                if attempt > 1:
-                    simulate_human_behavior(self.driver)
-                    wait_random_time()
+                logger.info(f"提取元数据 ({i+1}/{len(articles)}): "
+                            f"{article.get('title', '')[:40]}...")
 
-                self.driver.get(link)
-                time.sleep(1)
+                meta = self._extract_article_meta(link)
+                if meta:
+                    # 补充缺失字段（不覆盖已有值）
+                    for k in ("authors", "journal", "year", "keywords", "doi"):
+                        if meta.get(k) and not article.get(k):
+                            article[k] = meta[k]
 
-                # 执行重定向
-                for _ in range(3):
-                    try:
-                        self.driver.execute_script("redirectNewLink()")
-                    except Exception:
-                        pass
-                    time.sleep(0.5)
+                if extract_abstract and not article.get("abstract"):
+                    abstract = self.extract_abstract(link)
+                    if abstract:
+                        article["abstract"] = abstract
 
-                # 刷新2次
-                for _ in range(2):
-                    self.driver.refresh()
-                    time.sleep(1)
-                    try:
-                        self.driver.execute_script("redirectNewLink()")
-                    except Exception:
-                        pass
-
-                time.sleep(0.5)
-
-                # 查找下载按钮
-                css = ".btn-dlpdf a" if file_type == "pdf" else ".btn-dlcaj a"
-                link_elem = WebDriverWait(self.driver, 30).until(
-                    EC.presence_of_element_located((By.CSS_SELECTOR, css))
-                )
-                download_link = link_elem.get_attribute("href")
-                if not download_link:
-                    return False, "未找到下载链接"
-
-                # 模拟鼠标点击下载
-                ActionChains(self.driver).move_to_element(link_elem).click(link_elem).perform()
-
-                # 处理新窗口
-                original_window = self.driver.current_window_handle
-                if len(self.driver.window_handles) > 1:
-                    self.driver.switch_to.window(self.driver.window_handles[-1])
-
-                # 验证码检测
-                if "拼图校验" in self.driver.page_source:
-                    logger.warning(f"触发验证码: {title} (尝试 {attempt})")
-                    if len(self.driver.window_handles) > 1:
-                        self.driver.close()
-                    self.driver.switch_to.window(original_window)
-
-                    if attempt < settings.MAX_RETRIES:
-                        wait_random_time()
-                        for _ in range(4):
-                            self.driver.refresh()
-                            time.sleep(random.uniform(0.8, 1.0))
-                        continue
-                    else:
-                        return False, "验证码重试次数用尽"
-
-                time.sleep(3)
-
-                # 验证文件是否实际落盘（检查下载目录最近3秒内的PDF）
-                downloaded = False
-                download_path = Path(self.download_dir)
-                if download_path.exists():
-                    recent_pdfs = sorted(
-                        download_path.glob("*.pdf"),
-                        key=lambda p: p.stat().st_mtime,
-                        reverse=True
-                    )
-                    for pdf in recent_pdfs[:3]:
-                        if (time.time() - pdf.stat().st_mtime) < 10 and pdf.stat().st_size > 10000:
-                            downloaded = True
-                            article["pdf_path"] = str(pdf)
-                            logger.info(f"PDF已落盘: {pdf.name}")
-                            break
-
-                if not downloaded:
-                    logger.warning(f"PDF文件未检测到落盘: {title}")
-
-                # 切回主窗口
-                if len(self.driver.window_handles) > 1:
-                    self.driver.switch_to.window(original_window)
-
-                if downloaded:
-                    return True, "下载成功"
-                else:
-                    return False, "PDF文件未检测到落盘"
-
+                wait_random_time()
             except Exception as e:
-                logger.warning(f"下载 '{title}' 尝试 {attempt} 失败: {e}")
-                # 尝试恢复窗口状态
-                try:
-                    self.driver.switch_to.window(self.driver.window_handles[0])
-                except Exception:
-                    pass
-                if attempt < settings.MAX_RETRIES:
-                    wait_random_time()
-                else:
-                    return False, f"下载失败: {str(e)}"
+                logger.debug(f"提取元数据失败: {e}")
 
-        return False, "重试次数用尽"
+            enriched.append(article)
+
+        return enriched
 
     # ============================================================
     # 摘要提取（从文章详情页）
@@ -1570,7 +1474,7 @@ class CNKICrawler:
             return ""
 
     def _extract_article_meta(self, article_link: str) -> Optional[Dict]:
-        """从文章详情页提取元数据（作者、期刊、年份）"""
+        """从文章详情页提取元数据（作者、期刊、年份、关键词、DOI）"""
         try:
             self.driver.get(article_link)
             time.sleep(2)
@@ -1622,7 +1526,30 @@ class CNKICrawler:
                 except Exception:
                     continue
 
-            # 尝试从页面文本中提取
+            # 提取关键词
+            for sel in ["#keyword", ".keywords", "a[onclick*='keyword']",
+                        "div.clf-keyword", "p.keyword"]:
+                try:
+                    elem = self.driver.find_element(By.CSS_SELECTOR, sel)
+                    text = elem.text.strip()
+                    if text:
+                        # 清理分隔符
+                        text = re.sub(r"[;；\s]+", "；", text).strip("；")
+                        meta["keywords"] = text
+                        break
+                except Exception:
+                    continue
+
+            # 提取 DOI
+            try:
+                page_source = self.driver.page_source
+                doi_match = re.search(r'(?:DOI[:\s]*|doi:\s*)(10\.\d{4,}/[^\s"\'<]+)', page_source, re.IGNORECASE)
+                if doi_match:
+                    meta["doi"] = doi_match.group(1).rstrip(".")
+            except Exception:
+                pass
+
+            # 尝试从页面文本中提取年份
             if not meta.get("journal") or not meta.get("year"):
                 page_text = self.driver.find_element(By.TAG_NAME, "body").text
                 if not meta.get("year"):

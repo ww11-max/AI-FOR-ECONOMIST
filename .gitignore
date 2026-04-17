@@ -13,9 +13,8 @@ build/
 venv/
 
 # Output / runtime data
-downloads/
-logs/
 outputs/
+logs/
 config/*.json
 
 # IDE
